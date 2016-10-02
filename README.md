@@ -62,6 +62,10 @@ Here is an example for the dialplan:
     exten => _X.,1,Dial(Dongle/r1/${EXTEN})
     exten => _X.,n,Hangup
 
+    exten => _X.,n,DongleSendUSSD(dongle1,*#123#)
+
+    exten => _X.,n,DongleSendSMS(dongle0,${EXTEN},"Please call me",1440,yes)
+
 You can also use this:
 ----------------------
 

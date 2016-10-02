@@ -11,6 +11,9 @@
    Dmitry Vagin <dmitry2004@yandex.ru>
 
    bg <bg_one@mail.ru>
+   
+   DongleSendUSSD(Device,USSD) dialplan function,
+   inspired from http://a.dmin.pro/?p=2712 (presumably October 4, 2011) by arturius
 */
 
 #include <asterisk/app.h>	/* AST_DECLARE_APP_ARGS() ... */
@@ -25,29 +28,29 @@
 
 struct ast_channel;
 
-static int app_status_exec (struct ast_channel* channel, const char* data)
+static int app_status_exec(struct ast_channel* channel, const char* data)
 {
-	struct pvt * pvt;
-	char * parse;
+	struct pvt* pvt;
+	char* parse;
 	int stat;
 	char status[2];
 	int exists = 0;
 
-	AST_DECLARE_APP_ARGS (args,
-		AST_APP_ARG (resource);
-		AST_APP_ARG (variable);
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(resource);
+		AST_APP_ARG(variable);
 	);
 
-	if (ast_strlen_zero (data))
+	if (ast_strlen_zero(data))
 	{
 		return -1;
 	}
 
-	parse = ast_strdupa (data);
+	parse = ast_strdupa(data);
 
-	AST_STANDARD_APP_ARGS (args, parse);
+	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (ast_strlen_zero (args.resource) || ast_strlen_zero (args.variable))
+	if (ast_strlen_zero(args.resource) || ast_strlen_zero(args.variable))
 	{
 		return -1;
 	}
@@ -57,7 +60,7 @@ static int app_status_exec (struct ast_channel* channel, const char* data)
 	if(pvt)
 	{
 		/* ready for outgoing call */
-		ast_mutex_unlock (&pvt->lock);
+		ast_mutex_unlock(&pvt->lock);
 		stat = 2;
 	}
 	else
@@ -65,51 +68,92 @@ static int app_status_exec (struct ast_channel* channel, const char* data)
 		stat = exists ? 3 : 1;
 	}
 
-	snprintf (status, sizeof (status), "%d", stat);
-	pbx_builtin_setvar_helper (channel, args.variable, status);
+	snprintf(status, sizeof(status), "%d", stat);
+	pbx_builtin_setvar_helper(channel, args.variable, status);
 
 	return 0;
 }
 
-static int app_send_sms_exec (attribute_unused struct ast_channel* channel, const char* data)
+static int app_send_sms_exec(attribute_unused struct ast_channel* channel, const char* data)
 {
-	char*	parse;
+	char* parse;
 	const char* msg;
 	int status;
-	void * msgid;
+	void* msgid;
 
-	AST_DECLARE_APP_ARGS (args,
-		AST_APP_ARG (device);
-		AST_APP_ARG (number);
-		AST_APP_ARG (message);
-		AST_APP_ARG (validity);
-		AST_APP_ARG (report);
+	AST_DECLARE_APP_ARGS(args,
+		AST_APP_ARG(device);
+		AST_APP_ARG(number);
+		AST_APP_ARG(message);
+		AST_APP_ARG(validity);
+		AST_APP_ARG(report);
 	);
 
-	if (ast_strlen_zero (data))
+	if (ast_strlen_zero(data))
 	{
 		return -1;
 	}
 
-	parse = ast_strdupa (data);
+	parse = ast_strdupa(data);
 
-	AST_STANDARD_APP_ARGS (args, parse);
+	AST_STANDARD_APP_ARGS(args, parse);
 
-	if (ast_strlen_zero (args.device))
+	if (ast_strlen_zero(args.device))
 	{
-		ast_log (LOG_ERROR, "NULL device for message -- SMS will not be sent\n");
+		ast_log(LOG_ERROR, "NULL device for message -- SMS will not be sent\n");
 		return -1;
 	}
 
-	if (ast_strlen_zero (args.number))
+	if (ast_strlen_zero(args.number))
 	{
-		ast_log (LOG_ERROR, "NULL destination for message -- SMS will not be sent\n");
+		ast_log(LOG_ERROR, "NULL destination for message -- SMS will not be sent\n");
 		return -1;
 	}
 
 	msg = send_sms(args.device, args.number, args.message, args.validity, args.report, &status, &msgid);
 	if(!status)
-		ast_log (LOG_ERROR, "[%s] %s with id %p\n", args.device, msg, msgid);
+		ast_log(LOG_ERROR, "[%s] %s with id %p\n", args.device, msg, msgid);
+	return !status;
+}
+
+static int app_send_ussd_exec(attribute_unused struct ast_channel* channel, const char* data)
+{
+	char* parse;
+	const char* msg;
+	int status;
+	void* msgid;
+
+	AST_DECLARE_APP_ARGS(args,
+		 AST_APP_ARG(device);
+		 AST_APP_ARG(ussd);
+	);
+
+	if (ast_strlen_zero(data))
+	{
+		return -1;
+	}
+
+	parse = ast_strdupa(data);
+
+	AST_STANDARD_APP_ARGS(args, parse);
+
+	if (ast_strlen_zero(args.device))
+	{
+		ast_log(LOG_ERROR, "NULL device for ussd -- USSD will not be sent\n");
+		return -1;
+	}
+
+	if (ast_strlen_zero(args.ussd))
+	{
+		ast_log(LOG_ERROR, "NULL ussd command -- USSD will not be sent\n");
+		return -1;
+	}
+
+	msg = send_ussd(args.device, args.ussd, &status, &msgid);
+	if(!status)
+	{
+		ast_log(LOG_ERROR, "[%s] %s with id %p\n", args.device, msg, msgid);
+	}
 	return !status;
 }
 
@@ -117,11 +161,11 @@ static int app_send_sms_exec (attribute_unused struct ast_channel* channel, cons
 
 static const struct dongle_application
 {
-	const char*	name;
+	const char* name;
 
-	int		(*func)(struct ast_channel* channel, const char* data);
-	const char*	synopsis;
-	const char*	desc;
+	int (*func)(struct ast_channel* channel, const char* data);
+	const char* synopsis;
+	const char* desc;
 } dca[] =
 {
 	{
@@ -143,6 +187,14 @@ static const struct dongle_application
 		"  Message  - text of the message\n"
 		"  Validity - Validity period in minutes\n"
 		"  Report   - Boolean flag for report request\n"
+	},
+	{
+		"DongleSendUSSD",
+		app_send_ussd_exec,
+		"DongleSendUSSD(Device,USSD)",
+		"DongleSendUSSD(Device,USSD)\n"
+		"  Device   - Id of device from dongle.conf\n"
+		"  USSD     - ussd command\n"
 	}
 };
 
@@ -158,7 +210,7 @@ EXPORT_DEF void app_register()
 	unsigned i;
 	for(i = 0; i < ITEMS_OF(dca); i++)
 	{
-		ast_register_application2 (dca[i].name, (app_func_t)(dca[i].func), dca[i].synopsis, dca[i].desc, self_module());
+		ast_register_application2(dca[i].name, (app_func_t)(dca[i].func), dca[i].synopsis, dca[i].desc, self_module());
 	}
 }
 
