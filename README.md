@@ -165,25 +165,24 @@ In order to perform good quality calls you will need to take care of:
 
 * **Automatic gain control**:
 
-Chand_dongle does not contrôle the gain of the audio stream it receive. This result of Alice hearing Bob's voice loud and noisy.
+Chand_dongle does not control the gain of the audio stream it receive. This result of Alice hearing Bob's voice loud and noisy.
 It is possible to manualy manage the gain in dongle.conf but the better option is by far to apply automatic gain contrôle with the dialplan's function AGC.
 
 
 * **Jitter buffer**:
 
-Since asterisk 12 it is not possible anymore to enable Jitter buffer in dongle.conf it has to be applyed in the dialplan.
-The lack of Jitter buffer resulult in severe loss in the transport of the voice from Bob to alice. 
+Since asterisk 12 it is no longer possible to enable Jitter buffer in dongle.conf it has to be applyed in the dialplan.
+The lack of Jitter buffer resulult in severe loss in the transport of the voice from Bob to Alice. 
 
+#### Dialplan example
 
-###Dialplan example: 
+To set JITTERBUFFER and AGC in the dialplan on the appropriate channel regardless of who is initiating the call  we will have to use the "b" option of Dial:
 
-To set JITTERBUFFER and ADB in the dialplan on the appropriate channel regardless of who is initiating the call  we will have to use the "b" option of Dial:
+b( context^exten^priority )
 
-    b( context^exten^priority )
+Before initiating an outgoing call, Gosub to the specified location using the newly created channel. 
 
-    Before initiating an outgoing call, Gosub to the specified location using the newly created channel. 
-
-    The Gosubwill be executed for each destination channel."
+The Gosubwill be executed for each destination channel."
 
 ```ini
 
@@ -198,14 +197,14 @@ same = n,Return()
 
 [from-sip]
 ;This will be executed by an inbound SIP channel ( call initiated on the SIP side )
-Exten = _[+0-9].,1,Set(AGC(rx)=4000)
-same = n, Set(JITTERBUFFER(adaptive)=default)
+Exten = _[+0-9].,1,Set(JITTERBUFFER(adaptive)=default)
+same = n,Set(AGC(rx)=4000)
 same = n,Dial(Dongle/i:${IMEI_OF_MY_DONGLE}/${NUMBER_OF_BOB}) 
 ```
 
-Note: To use automatic gain control dialplan function (AGC) you will need to compile Asterisk with fun_speex ( see in menuselect ). 
+Note: To use automatic gain control dialplan function (AGC) you will need to compile Asterisk with func_speex ( see in menuselect ). 
 On rapberry Pi you will need to compile and install speex and speexdsp yourself, the version of speex provided by the depos does not support AGC.
-( beacause compiled with fixed point insted of floating point) see: [gist](https://gist.github.com/garronej/01f0dac45efe9161969a83890c019efa)
+( beacause compiled with fixed point insted of floating point) see: [HOWTO](https://gist.github.com/garronej/01f0dac45efe9161969a83890c019efa)
 
 
 
