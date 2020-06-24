@@ -695,13 +695,13 @@ EXPORT_DEF void at_retrieve_next_sms(struct cpvt *cpvt)
 		pvt->incoming_sms_index = -1U;
 
 		/* clear this message index from inbox */
-		pvt->incoming_sms_inbox[i / 32] &= ~(1U << (i % 32));
+		SMS_INBOX_CLEAR(pvt->incoming_sms_inbox, i);
 	}
 
 	/* get next message to fetch from inbox */
 	for (i = 0; i != SMS_INDEX_MAX; i++)
 	{
-		if (pvt->incoming_sms_inbox[i / 32] & (1U << (i % 32)))
+		if (IS_SMS_INBOX_SET(pvt->incoming_sms_inbox, i))
 			break;
 	}
 
@@ -734,7 +734,7 @@ EXPORT_DEF int at_enqueue_retrieve_sms(struct cpvt *cpvt, int index)
 	}
 
 	/* set that we want to receive this message */
-	pvt->incoming_sms_inbox[index / 32] |= 1U << (index % 32);
+	SMS_INBOX_SET(pvt->incoming_sms_inbox, index);
 
 	/* check if message is already being received */
 	if (pvt->incoming_sms_index != -1U) {

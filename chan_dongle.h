@@ -102,6 +102,17 @@ typedef struct pvt_stat
 
 struct at_queue_task;
 
+typedef unsigned int sms_inbox_item_type;
+
+#define SMS_INBOX_ITEM_BITS		(sizeof(sms_inbox_item_type) * 8)
+#define SMS_INBOX_ARRAY_SIZE		(SMS_INDEX_MAX / SMS_INBOX_ITEM_BITS)
+#define SMS_INBOX_BIT(index)		((sms_inbox_item_type)(1) << (index % SMS_INBOX_ITEM_BITS))
+#define SMS_INBOX_INDEX(index)		(index / SMS_INBOX_ITEM_BITS)
+
+#define SMS_INBOX_SET(inbox, index)	(inbox[SMS_INBOX_INDEX(index)] |= SMS_INBOX_BIT(index))
+#define SMS_INBOX_CLEAR(inbox, index)	(inbox[SMS_INBOX_INDEX(index)] &= ~SMS_INBOX_BIT(index))
+#define IS_SMS_INBOX_SET(inbox, index)	(inbox[SMS_INBOX_INDEX(index)] & SMS_INBOX_BIT(index))
+
 typedef struct pvt
 {
 	AST_LIST_ENTRY (pvt)	entry;				/*!< linked list pointers */
@@ -163,7 +174,7 @@ typedef struct pvt
 	char			sms_scenter[20];
 
 	unsigned int		incoming_sms_index;
-	unsigned int		incoming_sms_inbox[(SMS_INDEX_MAX + 31) / 32];
+	sms_inbox_item_type	incoming_sms_inbox[SMS_INBOX_ARRAY_SIZE];
 
 	volatile unsigned int	connected:1;			/*!< do we have an connection to a device */
 	unsigned int		initialized:1;			/*!< whether a service level connection exists or not */
