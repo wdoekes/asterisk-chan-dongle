@@ -901,13 +901,15 @@ EXPORT_DEF int tpdu_parse_deliver(const uint8_t *pdu, size_t pdu_length, int tpd
 						return -1;
 					}
 					udh->ss = pdu[i++];
+					udhl -= 1; /* consume the 1 data byte from udhl budget */
 					break;
-				case 0x25: /* National Language Single Shift */
+				case 0x25: /* National Language Locking Shift (e.g. Turkish = 1) */
 					if (iei_len != 1) {
 						chan_dongle_err = E_UNKNOWN;
 						return -1;
 					}
 					udh->ls = pdu[i++];
+					udhl -= 1; /* consume the 1 data byte from udhl budget */
 					break;
 				default:
 					/* skip rest of IEI */

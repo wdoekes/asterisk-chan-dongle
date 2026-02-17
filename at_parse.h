@@ -17,7 +17,7 @@ EXPORT_DECL char* at_parse_cops (char* str);
 EXPORT_DECL int at_parse_creg (char* str, unsigned len, int* gsm_reg, int* gsm_reg_status, char** lac, char** ci);
 EXPORT_DECL int at_parse_cmti (const char* str);
 EXPORT_DECL int at_parse_cdsi (const char* str);
-EXPORT_DECL int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh);
+EXPORT_DECL int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh, char *raw_pdu, size_t raw_pdu_size);
 EXPORT_DECL int at_parse_cmgs (const char* str);
 EXPORT_DECL int at_parse_cusd (char* str, int * type, char ** cusd, int * dcs);
 EXPORT_DECL int at_parse_cpin (char* str, size_t len);

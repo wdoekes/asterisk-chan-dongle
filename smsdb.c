@@ -37,13 +37,15 @@ static sqlite3 *smsdb;
 
 #define DEFINE_SQL_STATEMENT(stmt,sql) static sqlite3_stmt *stmt; \
 	const char stmt##_sql[] = sql;
-DEFINE_SQL_STATEMENT(get_full_message_stmt, "SELECT message FROM incoming WHERE key = ? ORDER BY seqorder")
-DEFINE_SQL_STATEMENT(put_message_stmt, "INSERT OR REPLACE INTO incoming (key, seqorder, expiration, message) VALUES (?, ?, datetime(julianday(CURRENT_TIMESTAMP) + ? / 86400.0), ?)")
+DEFINE_SQL_STATEMENT(get_full_message_stmt, "SELECT message, rawpdu FROM incoming WHERE key = ? ORDER BY seqorder")
+DEFINE_SQL_STATEMENT(put_message_stmt, "INSERT OR REPLACE INTO incoming (key, seqorder, expiration, message, rawpdu) VALUES (?, ?, datetime(julianday(CURRENT_TIMESTAMP) + ? / 86400.0), ?, ?)")
 DEFINE_SQL_STATEMENT(clear_messages_stmt, "DELETE FROM incoming WHERE key = ?")
 DEFINE_SQL_STATEMENT(purge_messages_stmt, "DELETE FROM incoming WHERE expiration < CURRENT_TIMESTAMP")
 DEFINE_SQL_STATEMENT(get_cnt_stmt, "SELECT COUNT(seqorder) FROM incoming WHERE key = ?")
-DEFINE_SQL_STATEMENT(create_incoming_stmt, "CREATE TABLE IF NOT EXISTS incoming (key VARCHAR(256), seqorder INTEGER, expiration TIMESTAMP DEFAULT CURRENT_TIMESTAMP, message VARCHAR(256), PRIMARY KEY(key, seqorder))")
+DEFINE_SQL_STATEMENT(create_incoming_stmt, "CREATE TABLE IF NOT EXISTS incoming (key VARCHAR(256), seqorder INTEGER, expiration TIMESTAMP DEFAULT CURRENT_TIMESTAMP, message VARCHAR(256), rawpdu TEXT DEFAULT '', PRIMARY KEY(key, seqorder))")
 DEFINE_SQL_STATEMENT(create_index_stmt, "CREATE INDEX IF NOT EXISTS incoming_key ON incoming(key)")
+/* Migration: add rawpdu column to existing databases that lack it */
+DEFINE_SQL_STATEMENT(migrate_rawpdu_stmt, "ALTER TABLE incoming ADD COLUMN rawpdu TEXT DEFAULT ''")
 DEFINE_SQL_STATEMENT(create_outgoingref_stmt, "CREATE TABLE IF NOT EXISTS outgoing_ref (key VARCHAR(256), refid INTEGER, PRIMARY KEY(key))") // key: IMSI/DEST_ADDR
 DEFINE_SQL_STATEMENT(create_outgoingmsg_stmt, "CREATE TABLE IF NOT EXISTS outgoing_msg (dev VARCHAR(256), dst VARCHAR(255), cnt INTEGER, expiration TIMESTAMP, srr BOOLEAN, payload BLOB)")
 DEFINE_SQL_STATEMENT(create_outgoingpart_stmt, "CREATE TABLE IF NOT EXISTS outgoing_part (key VARCHAR(256), msg INTEGER, status INTEGER, PRIMARY KEY(key))") // key: IMSI/DEST_ADDR/MR
@@ -105,6 +107,7 @@ static void clean_statements(void)
 	clean_stmt(&get_cnt_stmt, get_cnt_stmt_sql);
 	clean_stmt(&create_incoming_stmt, create_incoming_stmt_sql);
 	clean_stmt(&create_index_stmt, create_index_stmt_sql);
+	clean_stmt(&migrate_rawpdu_stmt, migrate_rawpdu_stmt_sql);
 	clean_stmt(&create_outgoingref_stmt, create_outgoingref_stmt_sql);
 	clean_stmt(&create_outgoingmsg_stmt, create_outgoingmsg_stmt_sql);
 	clean_stmt(&create_outgoingpart_stmt, create_outgoingpart_stmt_sql);
@@ -177,6 +180,18 @@ static int db_create_smsdb(void)
 	}
 	sqlite3_reset(create_index_stmt);
 	ast_mutex_unlock(&dblock);
+
+	/* Migration: add rawpdu column for databases created before this change.
+	 * SQLite returns an error if the column already exists; ignore it. */
+	if (!migrate_rawpdu_stmt) {
+		init_stmt(&migrate_rawpdu_stmt, migrate_rawpdu_stmt_sql, sizeof(migrate_rawpdu_stmt_sql));
+	}
+	if (migrate_rawpdu_stmt) {
+		ast_mutex_lock(&dblock);
+		sqlite3_step(migrate_rawpdu_stmt); /* ignore result: fails harmlessly if column exists */
+		sqlite3_reset(migrate_rawpdu_stmt);
+		ast_mutex_unlock(&dblock);
+	}
 
 	if (!create_outgoingref_stmt) {
 		init_stmt(&create_outgoingref_stmt, create_outgoingref_stmt_sql, sizeof(create_outgoingref_stmt_sql));
@@ -307,14 +322,17 @@ static int smsdb_rollback_transaction(void)
  * \param ref -- The reference ID
  * \param parts -- The total number of messages
  * \param order -- The current message number
- * \param msg -- The current message part
- * \param out -- Output: Only written if parts == cnt
+ * \param msg -- The current message part (UTF-8 decoded text)
+ * \param raw_pdu -- The raw PDU hex string for this part
+ * \param out -- Output: UTF-8 concatenated text (only written when all parts arrive)
+ * \param out_raw_pdu -- Output: pipe-separated raw PDU hex strings for all parts (only written when all parts arrive)
  * \retval <=0 Error
  * \retval >0 Current number of messages in the DB
  */
-EXPORT_DEF int smsdb_put(const char *id, const char *addr, int ref, int parts, int order, const char *msg, char *out)
+EXPORT_DEF int smsdb_put(const char *id, const char *addr, int ref, int parts, int order, const char *msg, const char *raw_pdu, char *out, char *out_raw_pdu)
 {
 	const char *part;
+	const char *part_pdu;
 	char fullkey[MAX_DB_FIELD + 1];
 	int fullkey_len;
 	int res = 0;
@@ -339,6 +357,9 @@ EXPORT_DEF int smsdb_put(const char *id, const char *addr, int ref, int parts, i
 	} else if (sqlite3_bind_text(put_message_stmt, 4, msg, -1, SQLITE_STATIC) != SQLITE_OK) {
 		ast_log(LOG_WARNING, "Couldn't bind msg to stmt: %s\n", sqlite3_errmsg(smsdb));
 		res = -1;
+	} else if (sqlite3_bind_text(put_message_stmt, 5, raw_pdu ? raw_pdu : "", -1, SQLITE_STATIC) != SQLITE_OK) {
+		ast_log(LOG_WARNING, "Couldn't bind rawpdu to stmt: %s\n", sqlite3_errmsg(smsdb));
+		res = -1;
 	} else if (sqlite3_step(put_message_stmt) != SQLITE_DONE) {
 		ast_log(LOG_WARNING, "Couldn't execute statement: %s\n", sqlite3_errmsg(smsdb));
 		res = -1;
@@ -358,20 +379,41 @@ EXPORT_DEF int smsdb_put(const char *id, const char *addr, int ref, int parts, i
 	sqlite3_reset(get_cnt_stmt);
 
 	if (res != -1 && res == parts) {
+		char *out_raw_pdu_ptr = out_raw_pdu;
+		int first_pdu = 1;
+
 		if (sqlite3_bind_text(get_full_message_stmt, 1, fullkey, fullkey_len, SQLITE_STATIC) != SQLITE_OK) {
 			ast_log(LOG_WARNING, "Couldn't bind key to stmt: %s\n", sqlite3_errmsg(smsdb));
 			res = -1;
 		} else while (sqlite3_step(get_full_message_stmt) == SQLITE_ROW) {
+			/* column 0: message text, column 1: rawpdu hex */
 			part = (const char*)sqlite3_column_text(get_full_message_stmt, 0);
 			int partlen = sqlite3_column_bytes(get_full_message_stmt, 0);
+			part_pdu = (const char*)sqlite3_column_text(get_full_message_stmt, 1);
+			int part_pdu_len = sqlite3_column_bytes(get_full_message_stmt, 1);
+
 			if (!part) {
 				ast_log(LOG_WARNING, "Couldn't get value\n");
 				res = -1;
 				break;
 			}
+			/* Concatenate decoded text */
 			out = stpncpy(out, part, partlen);
+
+			/* Concatenate raw PDU hex strings with '|' separator */
+			if (out_raw_pdu_ptr && part_pdu && part_pdu_len > 0) {
+				if (!first_pdu) {
+					*out_raw_pdu_ptr++ = '|';
+				}
+				memcpy(out_raw_pdu_ptr, part_pdu, part_pdu_len);
+				out_raw_pdu_ptr += part_pdu_len;
+				first_pdu = 0;
+			}
 		}
 		out[0] = '\0';
+		if (out_raw_pdu_ptr) {
+			*out_raw_pdu_ptr = '\0';
+		}
 		sqlite3_reset(get_full_message_stmt);
 
 		if (res >= 0) {

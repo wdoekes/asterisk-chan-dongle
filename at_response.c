@@ -1268,6 +1268,9 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 	char payload[SMSDB_PAYLOAD_MAX_LEN];
 	ssize_t payload_len;
 	int status_report[256];
+	/* Raw PDU hex for this individual part, and concatenated raw PDU for all parts */
+	char raw_pdu[SMSDB_RAW_PDU_MAX_LEN];
+	char raw_pdu_concat[SMSDB_RAW_PDU_CONCAT_MAX_LEN];
 
 	const struct at_queue_cmd * ecmd = at_queue_head_cmd(pvt);
 
@@ -1276,7 +1279,8 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 		if (ecmd->res == RES_CMGR || ecmd->cmd == CMD_USER) {
 			at_queue_handle_result (pvt, RES_CMGR);
 
-			res = at_parse_cmgr(str, len, &tpdu_type, sca, sizeof(sca), oa, sizeof(oa), scts, &mr, &st, dt, msg, &msg_len, &udh);
+			raw_pdu[0] = '\0';
+			res = at_parse_cmgr(str, len, &tpdu_type, sca, sizeof(sca), oa, sizeof(oa), scts, &mr, &st, dt, msg, &msg_len, &udh, raw_pdu, sizeof(raw_pdu));
 			if (res < 0) {
 				ast_log(LOG_WARNING, "[%s] Error parsing incoming message: %s\n", PVT_ID(pvt), error2str(chan_dongle_err));
 				goto receive_next_no_delete;
@@ -1316,7 +1320,8 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 				ast_debug (1, "[%s] Successfully read SM\n", PVT_ID(pvt));
 				if (udh.parts > 1) {
 					ast_verb (1, "[%s] Got SM part from %s: '%s'; [ref=%d, parts=%d, order=%d]\n", PVT_ID(pvt), oa, msg, udh.ref, udh.parts, udh.order);
-					csms_cnt = smsdb_put(pvt->imsi, oa, udh.ref, udh.parts, udh.order, msg, fullmsg);
+					raw_pdu_concat[0] = '\0';
+					csms_cnt = smsdb_put(pvt->imsi, oa, udh.ref, udh.parts, udh.order, msg, raw_pdu, fullmsg, raw_pdu_concat);
 					if (csms_cnt <= 0) {
 						ast_log(LOG_ERROR, "[%s] Error putting SMS to SMSDB\n", PVT_ID(pvt));
 						goto receive_as_is;
@@ -1332,6 +1337,9 @@ receive_as_is:
 					strncpy(fullmsg, msg, msg_len);
 					fullmsg[msg_len] = '\0';
 					fullmsg_len = msg_len;
+					/* For single-part SMS the raw_pdu_concat is just the single raw PDU */
+					strncpy(raw_pdu_concat, raw_pdu, sizeof(raw_pdu_concat) - 1);
+					raw_pdu_concat[sizeof(raw_pdu_concat) - 1] = '\0';
 				}
 
 				ast_verb (1, "[%s] Got full SMS from %s: '%s'\n", PVT_ID(pvt), oa, fullmsg);
@@ -1345,6 +1353,7 @@ receive_as_is:
 						{ "SMS", fullmsg } ,
 						{ "SMS_BASE64", text_base64 },
 						{ "SMS_TS", scts },
+						{ "SMS_RAW_PDU", raw_pdu_concat },
 						{ NULL, NULL },
 					};
 					start_local_channel (pvt, "sms", oa, vars);

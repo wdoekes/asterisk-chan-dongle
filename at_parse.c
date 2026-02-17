@@ -317,7 +317,7 @@ EXPORT_DEF int at_parse_cdsi (const char* str)
  * \retval -1 parse error
  */
 
-EXPORT_DEF int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh)
+EXPORT_DEF int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, size_t sca_len, char *oa, size_t oa_len, char *scts, int *mr, int *st, char *dt, char *msg, size_t *msg_len, pdu_udh_t *udh, char *raw_pdu, size_t raw_pdu_size)
 {
 	/* skip "+CMGR:" */
 	str += 6;
@@ -366,6 +366,20 @@ EXPORT_DEF int at_parse_cmgr(char *str, size_t len, int *tpdu_type, char *sca, s
 		return -1;
 	}
 	str = marks[2] + 1;
+
+	/* Capture the raw PDU hex string BEFORE unhex() modifies str in-place.
+	 * The hex string ends at the first '\r', '\n', or '\0'. */
+	if (raw_pdu && raw_pdu_size > 0) {
+		size_t hex_len = 0;
+		while (str[hex_len] && str[hex_len] != '\r' && str[hex_len] != '\n') {
+			hex_len++;
+		}
+		if (hex_len >= raw_pdu_size) {
+			hex_len = raw_pdu_size - 1;
+		}
+		memcpy(raw_pdu, str, hex_len);
+		raw_pdu[hex_len] = '\0';
+	}
 
 	int pdu_length = (unhex(str, (uint8_t*)str) + 1) / 2;
 	if (pdu_length < 0) {
