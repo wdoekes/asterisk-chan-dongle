@@ -1268,9 +1268,10 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 	char payload[SMSDB_PAYLOAD_MAX_LEN];
 	ssize_t payload_len;
 	int status_report[256];
-	/* Raw PDU hex for this individual part, and concatenated raw PDU for all parts */
+	/* Raw PDU hex for this individual part (512 hex chars + NUL, safe on stack) */
 	char raw_pdu[SMSDB_RAW_PDU_MAX_LEN];
-	char raw_pdu_concat[SMSDB_RAW_PDU_CONCAT_MAX_LEN];
+	/* Concatenated raw PDUs for multipart: too large for stack (~128KB), use heap */
+	char *raw_pdu_concat = NULL;
 
 	const struct at_queue_cmd * ecmd = at_queue_head_cmd(pvt);
 
@@ -1285,6 +1286,14 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 				ast_log(LOG_WARNING, "[%s] Error parsing incoming message: %s\n", PVT_ID(pvt), error2str(chan_dongle_err));
 				goto receive_next_no_delete;
 			}
+
+			/* Allocate concat buffer on heap — up to 255 parts × 512 hex chars + separators */
+			raw_pdu_concat = ast_malloc(SMSDB_RAW_PDU_CONCAT_MAX_LEN);
+			if (!raw_pdu_concat) {
+				ast_log(LOG_ERROR, "[%s] Out of memory allocating raw_pdu_concat\n", PVT_ID(pvt));
+				goto receive_next_no_delete;
+			}
+			raw_pdu_concat[0] = '\0';
 			switch (PDUTYPE_MTI(tpdu_type)) {
 			case PDUTYPE_MTI_SMS_STATUS_REPORT:
 				ast_verb(1, "[%s] Got status report with ref %d from %s and status code %d\n", PVT_ID(pvt), mr, oa, st);
@@ -1320,7 +1329,6 @@ static int at_response_cmgr(struct pvt* pvt, char * str, size_t len)
 				ast_debug (1, "[%s] Successfully read SM\n", PVT_ID(pvt));
 				if (udh.parts > 1) {
 					ast_verb (1, "[%s] Got SM part from %s: '%s'; [ref=%d, parts=%d, order=%d]\n", PVT_ID(pvt), oa, msg, udh.ref, udh.parts, udh.order);
-					raw_pdu_concat[0] = '\0';
 					csms_cnt = smsdb_put(pvt->imsi, oa, udh.ref, udh.parts, udh.order, msg, raw_pdu, fullmsg, raw_pdu_concat);
 					if (csms_cnt <= 0) {
 						ast_log(LOG_ERROR, "[%s] Error putting SMS to SMSDB\n", PVT_ID(pvt));
@@ -1337,9 +1345,9 @@ receive_as_is:
 					strncpy(fullmsg, msg, msg_len);
 					fullmsg[msg_len] = '\0';
 					fullmsg_len = msg_len;
-					/* For single-part SMS the raw_pdu_concat is just the single raw PDU */
-					strncpy(raw_pdu_concat, raw_pdu, sizeof(raw_pdu_concat) - 1);
-					raw_pdu_concat[sizeof(raw_pdu_concat) - 1] = '\0';
+					/* For single-part SMS raw_pdu_concat is just the single raw PDU */
+					strncpy(raw_pdu_concat, raw_pdu, SMSDB_RAW_PDU_CONCAT_MAX_LEN - 1);
+					raw_pdu_concat[SMSDB_RAW_PDU_CONCAT_MAX_LEN - 1] = '\0';
 				}
 
 				ast_verb (1, "[%s] Got full SMS from %s: '%s'\n", PVT_ID(pvt), oa, fullmsg);
@@ -1367,11 +1375,15 @@ receive_as_is:
 					at_res2str (ecmd->res), at_cmd2str (ecmd->cmd));
 		}
 receive_next:
+		ast_free(raw_pdu_concat);
+		raw_pdu_concat = NULL;
 		if (CONF_SHARED(pvt, autodeletesms) && pvt->incoming_sms_index != -1U)
 		{
 			at_enqueue_delete_sms(&pvt->sys_chan, pvt->incoming_sms_index);
 		}
 receive_next_no_delete:
+		ast_free(raw_pdu_concat);
+		raw_pdu_concat = NULL;
 		at_retrieve_next_sms(&pvt->sys_chan, at_cmd_suppress_error_mode(ecmd->flags));
 	}
 	else
