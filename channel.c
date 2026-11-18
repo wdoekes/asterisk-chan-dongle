@@ -17,6 +17,7 @@
 #include <asterisk/musiconhold.h>		/* ast_moh_start() ast_moh_stop() */
 #include <asterisk/lock.h>			/* AST_MUTEX_DEFINE_STATIC */
 #include <asterisk/timing.h>			/* ast_timer_fd() ast_timer_set_rate() ast_timer_ack() */
+#include <asterisk/indications.h>		/* ast_playtones_start() */
 
 #include "ast_compat.h"
 #if ASTERISK_VERSION_NUM >= 130000 /* 13+ */
@@ -450,9 +451,27 @@ static int channel_answer (struct ast_channel* channel)
 #/* */
 static int channel_digit_begin (struct ast_channel* channel, char digit)
 {
+	static const char * const dtmf_tones[] = {
+		"!941+1336/200", /* 0 */
+		"!697+1209/200", /* 1 */
+		"!697+1336/200", /* 2 */
+		"!697+1477/200", /* 3 */
+		"!770+1209/200", /* 4 */
+		"!770+1336/200", /* 5 */
+		"!770+1477/200", /* 6 */
+		"!852+1209/200", /* 7 */
+		"!852+1336/200", /* 8 */
+		"!852+1477/200", /* 9 */
+		"!697+1633/200", /* A */
+		"!770+1633/200", /* B */
+		"!852+1633/200", /* C */
+		"!941+1633/200", /* D */
+		"!941+1209/200", /* * */
+		"!941+1477/200"  /* # */
+	};
 	struct cpvt* cpvt = ast_channel_tech_pvt(channel);
 	struct pvt* pvt;
-	int rv;
+	const char *tone = NULL;
 
 	if(!cpvt || cpvt->channel != channel || !cpvt->pvt)
 	{
@@ -461,22 +480,26 @@ static int channel_digit_begin (struct ast_channel* channel, char digit)
 	}
 	pvt = cpvt->pvt;
 
-	ast_mutex_lock (&pvt->lock);
+	if (digit >= '0' && digit <= '9')
+		tone = dtmf_tones[digit - '0'];
+	else if (digit >= 'A' && digit <= 'D')
+		tone = dtmf_tones[digit - 'A' + 10];
+	else if (digit >= 'a' && digit <= 'd')
+		tone = dtmf_tones[digit - 'a' + 10];
+	else if (digit == '*')
+		tone = dtmf_tones[14];
+	else if (digit == '#')
+		tone = dtmf_tones[15];
+	else
+		return -1;
 
-	rv = at_enqueue_dtmf(cpvt, digit);
-	if (rv)
+	if (ast_playtones_start(channel, 0, tone, 0))
 	{
-		ast_mutex_unlock (&pvt->lock);
-		if(rv == -1974)
-			ast_log (LOG_WARNING, "[%s] Sending DTMF %c not supported by dongle. Tell Asterisk to generate inband\n", PVT_ID(pvt), digit);
-		else
-			ast_log (LOG_ERROR, "[%s] Error adding DTMF %c command to queue\n", PVT_ID(pvt), digit);
+		ast_log (LOG_ERROR, "[%s] Unable to generate inband DTMF %c\n", PVT_ID(pvt), digit);
 		return -1;
 	}
 
-	ast_mutex_unlock (&pvt->lock);
-
-	ast_debug (3, "[%s] Send DTMF %c\n", PVT_ID(pvt), digit);
+	ast_debug (3, "[%s] Send inband DTMF %c\n", PVT_ID(pvt), digit);
 
 	return 0;
 }
@@ -748,6 +771,8 @@ static struct ast_frame* channel_read (struct ast_channel* channel)
 				if(f->frametype == AST_FRAME_DTMF_BEGIN)
 				{
 					pvt->dtmf_begin_time = ast_tvnow();
+					f->frametype = AST_FRAME_NULL;
+					f->subclass_integer = 0;
 				}
 				else if (f->frametype == AST_FRAME_DTMF_END)
 				{
